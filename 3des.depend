@@ -1,0 +1,9 @@
+# depslib dependency file v1.0
+1477870058 source:/home/chris/3des/main.cpp
+	<iostream>
+	<string.h>
+	<cryptopp/sha.h>
+	<fstream>
+	<iomanip>
+	<bitset>
+
