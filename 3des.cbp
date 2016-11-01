@@ -32,7 +32,7 @@
 				<Option object_output="obj/Debug/" />
 				<Option type="1" />
 				<Option compiler="gcc" />
-				<Option parameters="genkey" />
+				<Option parameters="genkey sooperseecret mykey" />
 				<Compiler>
 					<Add option="-g" />
 				</Compiler>
@@ -42,7 +42,7 @@
 				<Option object_output="obj/Debug/" />
 				<Option type="1" />
 				<Option compiler="gcc" />
-				<Option parameters="encrypt inputFile keyFile outputFile mode" />
+				<Option parameters="encrypt inputFile mykey outputFile mode" />
 				<Compiler>
 					<Add option="-g" />
 				</Compiler>
