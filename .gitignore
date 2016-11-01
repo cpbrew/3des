@@ -1,2 +1,7 @@
 bin/
 obj/
+3des.depend
+3des.layout
+inputFile
+outputFile
+keyFile
