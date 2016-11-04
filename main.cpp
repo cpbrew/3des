@@ -20,6 +20,9 @@ uint64_t rotr(uint64_t, size_t, unsigned int);
 uint64_t rotl(uint64_t, size_t, unsigned int);
 void btol(uint8_t *, uint64_t *);
 void ltob(uint64_t, uint8_t *);
+void printNumberedBits(uint64_t, size_t);
+template <typename T>
+void reverseArray(T *, size_t);
 
 // How many bits the key schedule state is rotated each round
 const int KS[16] = {1, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 1};
@@ -170,29 +173,16 @@ int main(int argc, char *argv[])
 
         for (unsigned int i = 0; i < padding; i++)
         {
-            buffer[fileSize + i] = (char) padding;
+            buffer[fileSize + i] = (uint8_t) padding;
         }
 
         roundKeys = deriveRoundKeys(keys[0]);
         for (unsigned int i = 0; i < (fileSize + padding); i += 8)
         {
             btol(&(buffer[i]), &block);
-            cout << "Block before encrypting:" << endl;
-            cout << "0x" << hex << uppercase << setw(16) << setfill('0') << block << endl;
-
             block = runDes(roundKeys, block);
-
-            cout << "Block after encrypting:" << endl;
-            cout << "0x" << hex << uppercase << setw(16) << setfill('0') << block << endl;
             ltob(block, &(buffer[i]));
         }
-
-        cout << "Data after encrypting:" << endl;
-        for (unsigned int i = 0; i < (fileSize + padding); i++)
-        {
-            cout << hex << uppercase << setw(2) << setfill('0') << (int) buffer[i];
-        }
-        cout << endl;
 
         f.open(argv[4], ios::out | ios::binary);
         f.write((char *)buffer, fileSize + padding);
@@ -201,7 +191,9 @@ int main(int argc, char *argv[])
     else if (strcmp("decrypt", argv[1]) == 0)
     {
         if (argc != 6)
+        {
             usage(argv[0]);
+        }
 
         readKeys(argv[3], keys);
 
@@ -213,13 +205,17 @@ int main(int argc, char *argv[])
         f.read((char *)buffer, fileSize);
         f.close();
 
-//        roundKeys = deriveRoundKeys(keys[0]);
-//        for (unsigned int i = 0; i < (fileSize + padding); i++)
-//        {
-//            buffer[i] = runDes(roundKeys, buffer[i]);
-//        }
+        roundKeys = deriveRoundKeys(keys[0]);
+        reverseArray(roundKeys, 16);
 
-        padding = (byte) ((char *)buffer)[fileSize - 1];
+        for (unsigned int i = 0; i < fileSize; i += 8)
+        {
+            btol(&(buffer[i]), &block);
+            block = runDes(roundKeys, block);
+            ltob(block, &(buffer[i]));
+        }
+
+        padding = buffer[fileSize - 1];
 
         f.open(argv[4], ios::out | ios::binary);
         f.write((char *)buffer, fileSize - padding);
@@ -255,6 +251,7 @@ void genkey(const char *password, const char *keyFile)
 uint64_t runDes(uint64_t *roundKeys, uint64_t block)
 {
     block = permutate(block, 64, IP, 64);
+
     uint32_t l = (uint32_t) (block >> 32),
              r = (uint32_t) (block & 0xFFFFFFFF),
              tmp;
@@ -350,13 +347,33 @@ void readKeys(const char *keyFile, uint64_t *keys)
 
 uint64_t rotr(uint64_t bits, size_t width, unsigned int n)
 {
-    uint64_t mask = (1l << width) - 1;
+    uint64_t mask;
+    if (width == 64)
+    {
+        // special case: apparently << is a circular shift (at least in g++),
+        // meaning that 1 << 64 = 1 instead of 0. would rather avoid this
+        // behavior than rely on it
+        mask = -1;
+    }
+    else
+    {
+        mask = (1l << width) - 1;
+    }
     return (bits >> n) | ((bits << (width - n)) & mask);
 }
 
 uint64_t rotl(uint64_t bits, size_t width, unsigned int n)
 {
-    uint64_t mask = (1l << width) - 1;
+    uint64_t mask;
+    if (width == 64)
+    {
+        // special case: see above
+        mask = -1;
+    }
+    else
+    {
+        mask = (1l << width) - 1;
+    }
     return (bits << n) | ((bits >> (width - n)) & mask);
 }
 
@@ -387,4 +404,39 @@ void usage(const char *name)
     cout << name << " decrypt inputFile keyFile outputFile mode" << endl;
 
     exit(1);
+}
+
+void printNumberedBits(uint64_t data, size_t numBits)
+{
+    for (unsigned int i = 0; i < numBits; i++)
+    {
+        cout << setw(2) << setfill('0') << (i + 1) << " ";
+    }
+    cout << endl;
+    uint64_t mask = rotl(1l, 64, numBits);
+    for (unsigned int i = 0; i < numBits; i++)
+    {
+        mask = rotr(mask, 64, 1);
+        if ((mask & data) > 0)
+        {
+            cout << " 1 ";
+        }
+        else
+        {
+            cout << " 0 ";
+        }
+    }
+    cout << endl;
+}
+
+template <typename T>
+void reverseArray(T *arr, size_t n)
+{
+    T tmp;
+    for (unsigned int i = 0; i < (n / 2); i++)
+    {
+        tmp = arr[i];
+        arr[i] = arr[n - i - 1];
+        arr[n - i - 1] = tmp;
+    }
 }
