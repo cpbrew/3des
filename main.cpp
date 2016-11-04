@@ -8,6 +8,9 @@
 using namespace std;
 
 void genkey(const char *, const char *);
+void encrypt(uint8_t *, size_t, uint64_t);
+void decrypt(uint8_t *, size_t, uint64_t);
+
 uint64_t *deriveRoundKeys(uint64_t);
 uint64_t permutate(uint64_t, int, const int *, int);
 uint64_t runDes(uint64_t *, uint64_t);
@@ -129,9 +132,7 @@ const int P[32] = {16,  7, 20, 21,
 
 int main(int argc, char *argv[])
 {
-    uint64_t keys[3],
-             *roundKeys,
-             block;
+    uint64_t keys[3];
     uint8_t *buffer;
     fstream f;
     size_t fileSize;
@@ -176,13 +177,9 @@ int main(int argc, char *argv[])
             buffer[fileSize + i] = (uint8_t) padding;
         }
 
-        roundKeys = deriveRoundKeys(keys[0]);
-        for (unsigned int i = 0; i < (fileSize + padding); i += 8)
-        {
-            btol(&(buffer[i]), &block);
-            block = runDes(roundKeys, block);
-            ltob(block, &(buffer[i]));
-        }
+        encrypt(buffer, fileSize + padding, keys[0]);
+        decrypt(buffer, fileSize + padding, keys[1]);
+        encrypt(buffer, fileSize + padding, keys[2]);
 
         f.open(argv[4], ios::out | ios::binary);
         f.write((char *)buffer, fileSize + padding);
@@ -205,15 +202,9 @@ int main(int argc, char *argv[])
         f.read((char *)buffer, fileSize);
         f.close();
 
-        roundKeys = deriveRoundKeys(keys[0]);
-        reverseArray(roundKeys, 16);
-
-        for (unsigned int i = 0; i < fileSize; i += 8)
-        {
-            btol(&(buffer[i]), &block);
-            block = runDes(roundKeys, block);
-            ltob(block, &(buffer[i]));
-        }
+        decrypt(buffer, fileSize, keys[2]);
+        encrypt(buffer, fileSize, keys[1]);
+        decrypt(buffer, fileSize, keys[0]);
 
         padding = buffer[fileSize - 1];
 
@@ -246,6 +237,33 @@ void genkey(const char *password, const char *keyFile)
     out.write((char *)digest, 7);
 
     out.close();
+}
+
+void encrypt(uint8_t *data, size_t length, uint64_t key)
+{
+        uint64_t block = 0;
+        uint64_t *roundKeys = deriveRoundKeys(key);
+
+        for (unsigned int i = 0; i < length; i += 8)
+        {
+            btol(&(data[i]), &block);
+            block = runDes(roundKeys, block);
+            ltob(block, &(data[i]));
+        }
+}
+
+void decrypt(uint8_t *data, size_t length, uint64_t key)
+{
+        uint64_t block = 0;
+        uint64_t *roundKeys = deriveRoundKeys(key);
+        reverseArray(roundKeys, 16);
+
+        for (unsigned int i = 0; i < length; i += 8)
+        {
+            btol(&(data[i]), &block);
+            block = runDes(roundKeys, block);
+            ltob(block, &(data[i]));
+        }
 }
 
 uint64_t runDes(uint64_t *roundKeys, uint64_t block)
@@ -351,8 +369,8 @@ uint64_t rotr(uint64_t bits, size_t width, unsigned int n)
     if (width == 64)
     {
         // special case: apparently << is a circular shift (at least in g++),
-        // meaning that 1 << 64 = 1 instead of 0. would rather avoid this
-        // behavior than rely on it
+        // meaning that 1 << 64 = 1 instead of 0. would prefer to avoid this
+        // behavior rather than rely on it
         mask = -1;
     }
     else
