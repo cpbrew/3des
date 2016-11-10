@@ -8,8 +8,8 @@
 using namespace std;
 
 void genkey(const char *, const char *);
-void encrypt(uint8_t *, size_t, uint64_t);
-void decrypt(uint8_t *, size_t, uint64_t);
+void encrypt(uint64_t *, size_t, uint64_t);
+void decrypt(uint64_t *, size_t, uint64_t);
 
 uint64_t *deriveRoundKeys(uint64_t);
 uint64_t permutate(uint64_t, int, const int *, int);
@@ -26,6 +26,8 @@ void ltob(uint64_t, uint8_t *);
 void printNumberedBits(uint64_t, size_t);
 template <typename T>
 void reverseArray(T *, size_t);
+void byteArrayToLongArray(uint8_t *, uint64_t *, size_t bytes);
+void longArrayToByteArray(uint64_t *, uint8_t *, size_t bytes);
 
 // How many bits the key schedule state is rotated each round
 const int KS[16] = {1, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 1};
@@ -133,6 +135,7 @@ const int P[32] = {16,  7, 20, 21,
 int main(int argc, char *argv[])
 {
     uint64_t keys[3];
+    uint64_t *data;
     uint8_t *buffer;
     fstream f;
     size_t fileSize;
@@ -177,12 +180,17 @@ int main(int argc, char *argv[])
             buffer[fileSize + i] = (uint8_t) padding;
         }
 
-        encrypt(buffer, fileSize + padding, keys[0]);
-        decrypt(buffer, fileSize + padding, keys[1]);
-        encrypt(buffer, fileSize + padding, keys[2]);
+        data = new uint64_t[((fileSize + padding) / 8)];
+        byteArrayToLongArray(buffer, data, fileSize + padding);
+
+        encrypt(data, (fileSize + padding) / 8, keys[0]);
+        decrypt(data, (fileSize + padding) / 8, keys[1]);
+        encrypt(data, (fileSize + padding) / 8, keys[2]);
+
+        longArrayToByteArray(data, buffer, fileSize + padding);
 
         f.open(argv[4], ios::out | ios::binary);
-        f.write((char *)buffer, fileSize + padding);
+        f.write((const char *)buffer, fileSize + padding);
         f.close();
     }
     else if (strcmp("decrypt", argv[1]) == 0)
@@ -202,14 +210,18 @@ int main(int argc, char *argv[])
         f.read((char *)buffer, fileSize);
         f.close();
 
-        decrypt(buffer, fileSize, keys[2]);
-        encrypt(buffer, fileSize, keys[1]);
-        decrypt(buffer, fileSize, keys[0]);
+        data = new uint64_t[fileSize / 8];
+        byteArrayToLongArray(buffer, data, fileSize);
 
+        decrypt(data, fileSize / 8, keys[2]);
+        encrypt(data, fileSize / 8, keys[1]);
+        decrypt(data, fileSize / 8, keys[0]);
+
+        longArrayToByteArray(data, buffer, fileSize);
         padding = buffer[fileSize - 1];
 
         f.open(argv[4], ios::out | ios::binary);
-        f.write((char *)buffer, fileSize - padding);
+        f.write((const char *)buffer, fileSize - padding);
         f.close();
     }
 
@@ -239,30 +251,22 @@ void genkey(const char *password, const char *keyFile)
     out.close();
 }
 
-void encrypt(uint8_t *data, size_t length, uint64_t key)
+void encrypt(uint64_t *data, size_t blocks, uint64_t key)
 {
-        uint64_t block = 0;
         uint64_t *roundKeys = deriveRoundKeys(key);
-
-        for (unsigned int i = 0; i < length; i += 8)
+        for (unsigned int i = 0; i < blocks; i++)
         {
-            btol(&(data[i]), &block);
-            block = runDes(roundKeys, block);
-            ltob(block, &(data[i]));
+            data[i] = runDes(roundKeys, data[i]);
         }
 }
 
-void decrypt(uint8_t *data, size_t length, uint64_t key)
+void decrypt(uint64_t *data, size_t blocks, uint64_t key)
 {
-        uint64_t block = 0;
         uint64_t *roundKeys = deriveRoundKeys(key);
         reverseArray(roundKeys, 16);
-
-        for (unsigned int i = 0; i < length; i += 8)
+        for (unsigned int i = 0; i < blocks; i++)
         {
-            btol(&(data[i]), &block);
-            block = runDes(roundKeys, block);
-            ltob(block, &(data[i]));
+            data[i] = runDes(roundKeys, data[i]);
         }
 }
 
@@ -456,5 +460,21 @@ void reverseArray(T *arr, size_t n)
         tmp = arr[i];
         arr[i] = arr[n - i - 1];
         arr[n - i - 1] = tmp;
+    }
+}
+
+void byteArrayToLongArray(uint8_t *charArr, uint64_t *longArr, size_t bytes)
+{
+    for (unsigned int i = 0; i < bytes; i += 8)
+    {
+        btol(&(charArr[i]), &(longArr[i / 8]));
+    }
+}
+
+void longArrayToByteArray(uint64_t *longArr, uint8_t *charArr, size_t bytes)
+{
+    for (unsigned int i = 0; i < bytes; i += 8)
+    {
+        ltob(longArr[i / 8], &(charArr[i]));
     }
 }
