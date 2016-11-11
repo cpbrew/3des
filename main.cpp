@@ -1,33 +1,44 @@
 #include <iostream>
-#include <string.h>
 #include <cryptopp/sha.h>
 #include <fstream>
 #include <iomanip>
-#include <bitset>
+#include <cstdlib>
+#include <ctime>
+
+#define IV_FILENAME "IV.des"
 
 using namespace std;
 
-void genkey(const char *, const char *);
-void encrypt(uint64_t *, size_t, uint64_t);
-void decrypt(uint64_t *, size_t, uint64_t);
+enum Mode
+{
+    ECB,
+    CBC,
+    CTR
+};
 
+// Option functions
+void genkey(const char *, const char *);
+void encrypt(uint64_t *, size_t, uint64_t, Mode, uint64_t);
+void decrypt(uint64_t *, size_t, uint64_t, Mode, uint64_t);
+
+// Des algorithm functions
 uint64_t *deriveRoundKeys(uint64_t);
 uint64_t permutate(uint64_t, int, const int *, int);
 uint64_t runDes(uint64_t *, uint64_t);
 uint32_t roundFunc(uint32_t, uint64_t);
 uint32_t sbox(uint64_t);
 
+// Utility functions
 void readKeys(const char *, uint64_t *);
-void usage(const char *);
 uint64_t rotr(uint64_t, size_t, unsigned int);
 uint64_t rotl(uint64_t, size_t, unsigned int);
 void btol(uint8_t *, uint64_t *);
 void ltob(uint64_t, uint8_t *);
-void printNumberedBits(uint64_t, size_t);
 template <typename T>
 void reverseArray(T *, size_t);
 void byteArrayToLongArray(uint8_t *, uint64_t *, size_t bytes);
 void longArrayToByteArray(uint64_t *, uint8_t *, size_t bytes);
+void usage(const char *);
 
 // How many bits the key schedule state is rotated each round
 const int KS[16] = {1, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 1};
@@ -140,6 +151,8 @@ int main(int argc, char *argv[])
     fstream f;
     size_t fileSize;
     unsigned int padding;
+    Mode mode;
+    uint64_t iv;
 
     if (argc < 4)
     {
@@ -157,11 +170,47 @@ int main(int argc, char *argv[])
             return 0;
         }
     }
+
+    if (argc != 6)
+    {
+        usage(argv[0]);
+    }
+
+    if (strcmp("ECB", argv[5]) == 0)
+    {
+        mode = ECB;
+    }
+    else if (strcmp("CBC", argv[5]) == 0)
+    {
+        mode = CBC;
+    }
+    else if (strcmp("CTR", argv[5]) == 0)
+    {
+        mode = CTR;
+    }
+    else
+    {
+        usage(argv[0]);
+    }
+
     if (strcmp("encrypt", argv[1]) == 0)
     {
-        if (argc != 6)
+        // Create and store the IV
+        if (mode != ECB)
         {
-            usage(argv[0]);
+            srand(time(0));
+            iv = rand();
+            iv <<= 32;
+            iv |= rand();
+
+            data = new uint64_t[1];
+            data[0] = iv;
+
+            f.open(IV_FILENAME, ios::out | ios::binary);
+            f.write((const char *)data, 8);
+            f.close();
+
+            delete data;
         }
 
         readKeys(argv[3], keys);
@@ -183,9 +232,9 @@ int main(int argc, char *argv[])
         data = new uint64_t[((fileSize + padding) / 8)];
         byteArrayToLongArray(buffer, data, fileSize + padding);
 
-        encrypt(data, (fileSize + padding) / 8, keys[0]);
-        decrypt(data, (fileSize + padding) / 8, keys[1]);
-        encrypt(data, (fileSize + padding) / 8, keys[2]);
+        encrypt(data, (fileSize + padding) / 8, keys[0], mode, iv);
+        decrypt(data, (fileSize + padding) / 8, keys[1], mode, iv);
+        encrypt(data, (fileSize + padding) / 8, keys[2], mode, iv);
 
         longArrayToByteArray(data, buffer, fileSize + padding);
 
@@ -195,9 +244,17 @@ int main(int argc, char *argv[])
     }
     else if (strcmp("decrypt", argv[1]) == 0)
     {
-        if (argc != 6)
+        // Retrieve the IV
+        if (mode != ECB)
         {
-            usage(argv[0]);
+            data = new uint64_t[1];
+
+            f.open(IV_FILENAME, ios::in | ios::binary);
+            f.read((char *)data, 8);
+            f.close();
+
+            iv = data[0];
+            delete data;
         }
 
         readKeys(argv[3], keys);
@@ -213,9 +270,9 @@ int main(int argc, char *argv[])
         data = new uint64_t[fileSize / 8];
         byteArrayToLongArray(buffer, data, fileSize);
 
-        decrypt(data, fileSize / 8, keys[2]);
-        encrypt(data, fileSize / 8, keys[1]);
-        decrypt(data, fileSize / 8, keys[0]);
+        decrypt(data, fileSize / 8, keys[2], mode, iv);
+        encrypt(data, fileSize / 8, keys[1], mode, iv);
+        decrypt(data, fileSize / 8, keys[0], mode, iv);
 
         longArrayToByteArray(data, buffer, fileSize);
         padding = buffer[fileSize - 1];
@@ -228,6 +285,7 @@ int main(int argc, char *argv[])
     return 0;
 }
 
+// Generate three keys (since we're doing triple-des) from the password, and store them
 void genkey(const char *password, const char *keyFile)
 {
     char digest[CryptoPP::SHA256::DIGESTSIZE];
@@ -251,25 +309,65 @@ void genkey(const char *password, const char *keyFile)
     out.close();
 }
 
-void encrypt(uint64_t *data, size_t blocks, uint64_t key)
+// Do encryption-specific setup and then call the actual DES algorithm
+void encrypt(uint64_t *data, size_t blocks, uint64_t key, Mode mode, uint64_t iv)
 {
-        uint64_t *roundKeys = deriveRoundKeys(key);
-        for (unsigned int i = 0; i < blocks; i++)
+    uint64_t *roundKeys = deriveRoundKeys(key);
+    for (unsigned int i = 0; i < blocks; i++)
+    {
+        switch (mode)
         {
+        case ECB:
             data[i] = runDes(roundKeys, data[i]);
+            break;
+
+        case CBC:
+            data[i] = runDes(roundKeys, (data[i] ^ iv));
+            iv = data[i];
+            break;
+
+        case CTR:
+            data[i] = runDes(roundKeys, iv) ^ data[i];
+            iv++;
+            break;
         }
+    }
 }
 
-void decrypt(uint64_t *data, size_t blocks, uint64_t key)
+// Do decryption-specific setup and then call the actual DES algorithm
+void decrypt(uint64_t *data, size_t blocks, uint64_t key, Mode mode, uint64_t iv)
 {
-        uint64_t *roundKeys = deriveRoundKeys(key);
+    uint64_t *roundKeys = deriveRoundKeys(key);
+    if (mode != CTR)
+    {
         reverseArray(roundKeys, 16);
-        for (unsigned int i = 0; i < blocks; i++)
+    }
+    uint64_t tmp;
+
+    for (unsigned int i = 0; i < blocks; i++)
+    {
+        switch (mode)
         {
+        case ECB:
             data[i] = runDes(roundKeys, data[i]);
+            break;
+
+        case CBC:
+            tmp = data[i];
+            data[i] = runDes(roundKeys, data[i]) ^ iv;
+            iv = tmp;
+            break;
+
+        case CTR:
+            data[i] = runDes(roundKeys, iv) ^ data[i];
+            iv++;
+            break;
         }
+    }
 }
 
+// The core DES algorithm. Used for both encryption and decryption, since
+// they use the same steps and just apply the round keys in opposite order
 uint64_t runDes(uint64_t *roundKeys, uint64_t block)
 {
     block = permutate(block, 64, IP, 64);
@@ -290,6 +388,7 @@ uint64_t runDes(uint64_t *roundKeys, uint64_t block)
     return block;
 }
 
+// The DES "round function"
 uint32_t roundFunc(uint32_t data, uint64_t key)
 {
     uint64_t x = permutate(((uint64_t) data) & 0x00000000FFFFFFFFl, 32, EP, 48);
@@ -298,6 +397,8 @@ uint32_t roundFunc(uint32_t data, uint64_t key)
     return (uint32_t) permutate((uint64_t) data, 32, P, 32);
 }
 
+// Apply the s-boxes, where each 6 bits of input are substituted for the
+// corresponding 4 bits of output
 uint32_t sbox(uint64_t data)
 {
     uint32_t output = 0;
@@ -324,6 +425,7 @@ uint32_t sbox(uint64_t data)
     return output;
 }
 
+// Derive the 16 48-bit round keys from the original 56-bit key
 uint64_t *deriveRoundKeys(uint64_t key)
 {
     const uint64_t LEFT_MASK = 0x00FFFFFFF0000000l;
@@ -343,6 +445,8 @@ uint64_t *deriveRoundKeys(uint64_t key)
     return keys;
 }
 
+// Apply a given permutation vector to the bits of an input vector, used at
+// several different points in the DES algorithm
 uint64_t permutate(uint64_t bits, int bitLength, const int *permutation, int permLength)
 {
     uint64_t output = 0;
@@ -359,6 +463,7 @@ uint64_t permutate(uint64_t bits, int bitLength, const int *permutation, int per
     return output;
 }
 
+// Retrieve the three 56-bit keys
 void readKeys(const char *keyFile, uint64_t *keys)
 {
     ifstream in(keyFile, ios::in | ios::binary);
@@ -367,14 +472,15 @@ void readKeys(const char *keyFile, uint64_t *keys)
     in.close();
 }
 
+// Right circular bit shift (rotation) by n bits
 uint64_t rotr(uint64_t bits, size_t width, unsigned int n)
 {
     uint64_t mask;
     if (width == 64)
     {
-        // special case: apparently << is a circular shift (at least in g++),
-        // meaning that 1 << 64 = 1 instead of 0. would prefer to avoid this
-        // behavior rather than rely on it
+        // special case: apparently << is already a circular shift (at least
+        // in g++), meaning that 1 << 64 = 1 instead of 0. would prefer to
+        // avoid this behavior rather than rely on it
         mask = -1;
     }
     else
@@ -384,6 +490,7 @@ uint64_t rotr(uint64_t bits, size_t width, unsigned int n)
     return (bits >> n) | ((bits << (width - n)) & mask);
 }
 
+// Left circular bit shift (rotation) by n bits
 uint64_t rotl(uint64_t bits, size_t width, unsigned int n)
 {
     uint64_t mask;
@@ -399,6 +506,7 @@ uint64_t rotl(uint64_t bits, size_t width, unsigned int n)
     return (bits << n) | ((bits >> (width - n)) & mask);
 }
 
+// Convert an array of 8 separate bytes to a single 8-byte long, preserving byte order
 void btol(uint8_t *b, uint64_t *l)
 {
     *l = 0l;
@@ -409,6 +517,7 @@ void btol(uint8_t *b, uint64_t *l)
     }
 }
 
+// Convert a single 8-byte long to an array of 8 separate bytes, preserving byte order
 void ltob(uint64_t l, uint8_t *b)
 {
     for (int i = 7; i >= 0; i--)
@@ -418,39 +527,8 @@ void ltob(uint64_t l, uint8_t *b)
     }
 }
 
-void usage(const char *name)
-{
-    cout << "Usage:" << endl;
-    cout << name << " genkey password keyFile" << endl;
-    cout << name << " encrypt inputFile keyFile outputFile mode" << endl;
-    cout << name << " decrypt inputFile keyFile outputFile mode" << endl;
-
-    exit(1);
-}
-
-void printNumberedBits(uint64_t data, size_t numBits)
-{
-    for (unsigned int i = 0; i < numBits; i++)
-    {
-        cout << setw(2) << setfill('0') << (i + 1) << " ";
-    }
-    cout << endl;
-    uint64_t mask = rotl(1l, 64, numBits);
-    for (unsigned int i = 0; i < numBits; i++)
-    {
-        mask = rotr(mask, 64, 1);
-        if ((mask & data) > 0)
-        {
-            cout << " 1 ";
-        }
-        else
-        {
-            cout << " 0 ";
-        }
-    }
-    cout << endl;
-}
-
+// Reverse the order of elements in an array (used to reverse the order of
+// round keys for decrypting)
 template <typename T>
 void reverseArray(T *arr, size_t n)
 {
@@ -463,6 +541,7 @@ void reverseArray(T *arr, size_t n)
     }
 }
 
+// Convert an array of 1-byte numbers to an array of 8-byte numbers
 void byteArrayToLongArray(uint8_t *charArr, uint64_t *longArr, size_t bytes)
 {
     for (unsigned int i = 0; i < bytes; i += 8)
@@ -471,10 +550,22 @@ void byteArrayToLongArray(uint8_t *charArr, uint64_t *longArr, size_t bytes)
     }
 }
 
+// Convert an array of 8-byte numbers to an array of 1-byte numbers
 void longArrayToByteArray(uint64_t *longArr, uint8_t *charArr, size_t bytes)
 {
     for (unsigned int i = 0; i < bytes; i += 8)
     {
         ltob(longArr[i / 8], &(charArr[i]));
     }
+}
+
+// Print a help message and exit
+void usage(const char *name)
+{
+    cout << "Usage:" << endl;
+    cout << name << " genkey password keyFile" << endl;
+    cout << name << " encrypt inputFile keyFile outputFile mode" << endl;
+    cout << name << " decrypt inputFile keyFile outputFile mode" << endl;
+
+    exit(1);
 }
